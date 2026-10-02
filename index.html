@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-Powered Document Assistant</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-color: #f8fafc;
+            --accent-color: #38bdf8;
+            --accent-hover: #0ea5e9;
+            --border-color: #334155;
+        }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 800px;
+        }
+        h1 { margin-bottom: 0.5rem; color: var(--accent-color); }
+        p.subtitle { color: #94a3b8; margin-bottom: 2rem; }
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        input[type="file"], input[type="text"] {
+            width: 100%;
+            padding: 0.75rem;
+            margin-top: 0.5rem;
+            margin-bottom: 1rem;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            border-radius: 8px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: var(--accent-color);
+            color: var(--bg-color);
+            font-weight: bold;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: var(--accent-hover); }
+        .hidden { display: none; }
+        .reference-box {
+            background: #090d16;
+            border-left: 4px solid var(--accent-color);
+            padding: 1rem;
+            margin-top: 1rem;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .loader { color: var(--accent-color); font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Document Assistant</h1>
+        <p class="subtitle">Upload your research papers, notes, or manuals and chat with their contents.</p>
+
+        <!-- Upload Section -->
+        <div class="card">
+            <h3>1. Upload Document</h3>
+            <input type="file" id="fileInput" accept=".pdf,.txt">
+            <button onclick="uploadFile()">Upload & Analyze</button>
+            <div id="uploadStatus" style="margin-top: 1rem;"></div>
+        </div>
+
+        <!-- Summary Section -->
+        <div class="card hidden" id="summaryCard">
+            <h3>Document Summary</h3>
+            <p id="summaryText"></p>
+        </div>
+
+        <!-- QA Section -->
+        <div class="card hidden" id="qaCard">
+            <h3>2. Ask Questions</h3>
+            <input type="text" id="questionInput" placeholder="e.g., What are the main findings or topics?">
+            <button onclick="askQuestion()">Ask Assistant</button>
+            <div id="qaResult" class="hidden">
+                <h4 id="answerHeading"></h4>
+                <div class="reference-box" id="referenceText"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentFilename = null;
+
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const statusDiv = document.getElementById('uploadStatus');
+            if (fileInput.files.length === 0) {
+                statusDiv.innerHTML = "Please select a file first.";
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            statusDiv.innerHTML = '<span class="loader">Uploading and processing document...</span>';
+
+            try {
+                const response = await fetch('/upload', { method: 'POST', body: formData });
+                const data = await response.json();
+
+                if (data.success) {
+                    currentFilename = data.filename;
+                    statusDiv.innerHTML = `Successfully uploaded: <strong>${data.filename}</strong>`;
+                    document.getElementById('summaryText').innerText = data.summary;
+                    document.getElementById('summaryCard').classList.remove('hidden');
+                    document.getElementById('qaCard').classList.remove('hidden');
+                } else {
+                    statusDiv.innerHTML = `Error: ${data.error}`;
+                }
+            } catch (err) {
+                statusDiv.innerHTML = "An error occurred during upload.";
+            }
+        }
+
+        async function askQuestion() {
+            const question = document.getElementById('questionInput').value;
+            const qaResult = document.getElementById('qaResult');
+            const referenceText = document.getElementById('referenceText');
+            
+            if (!question.trim() || !currentFilename) return;
+
+            qaResult.classList.remove('hidden');
+            referenceText.innerHTML = '<span class="loader">Searching document contents...</span>';
+
+            try {
+                const response = await fetch('/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: currentFilename, question: question })
+                });
+                const data = await response.json();
+                
+                document.getElementById('answerHeading').innerText = data.answer;
+                referenceText.innerText = data.reference;
+            } catch (err) {
+                referenceText.innerText = "Failed to retrieve an answer.";
+            }
+        }
+    </script>
+</body>
+</html>
