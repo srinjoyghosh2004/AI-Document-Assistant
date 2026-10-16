@@ -1,48 +1,43 @@
-import os
 from flask import Flask, render_template, request, jsonify
-from werkzeug.utils import secure_filename
-import PyPDF2
+import os
+import re
+import time
+import base64
 from google import genai
 from google.genai import types
+import PyPDF2
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['ALLOWED_EXTENSIONS'] = {'pdf', 'txt'}
-app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # Limit file size strictly to 5MB
 
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-
-# Initialize the official Gemini Client (reads GEMINI_API_KEY from environment variables)
+# Initialize the Google GenAI client using your environment API key
 client = genai.Client()
 
-# Define strict safety settings to block explicit, harmful, or illegal text generation
-STRICT_SAFETY_SETTINGS = [
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE),
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE),
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE),
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE),
-]
-
 def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'txt', 'pdf', 'png', 'jpg', 'jpeg'}
 
-def extract_text(file_path, filename):
-    ext = filename.rsplit('.', 1)[1].lower()
-    text = ""
-    try:
-        if ext == 'txt':
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                text = f.read()
-        elif ext == 'pdf':
-            with open(file_path, 'rb') as f:
-                reader = PyPDF2.PdfReader(f)
-                for page in reader.pages:
-                    extracted = page.extract_text()
-                    if extracted:
-                        text += extracted + "\n"
-    except Exception as e:
-        print(f"Error parsing file: {e}")
-    return text
+def contains_prohibited_content(text):
+    """
+    Scans input text for patterns related to illegal acts, fraud, self-harm, 
+    violence, hate speech, sexually explicit material, pornography, or child safety violations (CSAM).
+    """
+    if not text:
+        return False
+        
+    prohibited_patterns = [
+        r'\b(csam|csae|child explicit|minor abuse|child exploitation)\b',
+        r'\b(suicide|self-harm|cut myself|end my life)\b',
+        r'\b(how to make a bomb|explosive recipe|illegal weapon)\b',
+        r'\b(hatespeech|racial slur|kill all|white supremacy target)\b',
+        r'\b(pornography|sexually explicit|xxx video|incest|underage explicit)\b',
+        r'\b(bank fraud scheme|money laundering guide|stolen credit card network)\b'
+    ]
+    
+    lower_text = text.lower()
+    for pattern in prohibited_patterns:
+        if re.search(pattern, lower_text):
+            return True
+            
+    return False
 
 @app.route('/')
 def index():
@@ -51,99 +46,132 @@ def index():
 @app.route('/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
-        return jsonify({'error': 'No file part found in request.'}), 400
-        
+        return jsonify({'error': 'No file part'}), 400
+    
     file = request.files['file']
     if file.filename == '':
-        return jsonify({'error': 'No file selected.'}), 400
+        return jsonify({'error': 'No selected file'}), 400
         
     if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(file_path)
+        filename = file.filename
+        file_ext = filename.rsplit('.', 1)[1].lower()
         
         try:
-            # 1. Extract text from the uploaded document
-            text = extract_text(file_path, filename)
-            
-            if not text.strip():
-                return jsonify({'error': 'The uploaded document is empty or unreadable.'}), 400
-
-            # 2. Run a safety evaluation check via Gemini API using strict settings
-            # We evaluate a snippet of the document to ensure no severe violations exist
-            preview_text = text[:3000] # Check the opening text bounds
-            prompt = f"Analyze this text snippet for any illegal, sexually explicit, or harmful content. If clean, provide a concise 3-sentence summary:\n\n{preview_text}"
-
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    safety_settings=STRICT_SAFETY_SETTINGS,
-                    max_output_tokens=200
-                )
-            )
-
-            # 3. Check if Google's safety filters triggered a block
-            if not response.text or (response.candidates and response.candidates[0].finish_reason == types.FinishReason.SAFETY):
+            if file_ext in {'txt', 'pdf'}:
+                extracted_text = ""
+                if file_ext == 'txt':
+                    extracted_text = file.read().decode('utf-8', errors='ignore')
+                elif file_ext == 'pdf':
+                    reader = PyPDF2.PdfReader(file)
+                    for page in reader.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            extracted_text += page_text + "\n"
+                            
+                if not extracted_text.strip():
+                    return jsonify({'error': 'Could not extract text from the document.'}), 400
+                
+                if contains_prohibited_content(extracted_text):
+                    return jsonify({'error': 'Upload rejected: Document contains restricted, harmful, or prohibited content policies.'}), 400
+                    
+                return jsonify({'text': extracted_text, 'type': 'text'})
+                
+            elif file_ext in {'png', 'jpg', 'jpeg'}:
+                image_bytes = file.read()
+                if not image_bytes:
+                    return jsonify({'error': 'Uploaded image file is empty.'}), 400
+                
+                encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+                mime_type = f"image/{'jpeg' if file_ext == 'jpg' else file_ext}"
+                
                 return jsonify({
-                    'error': 'Upload rejected: The document contains content that violates safety policies (explicit, harmful, or illicit material).'
-                }), 400
-
-            return jsonify({
-                'success': True,
-                'filename': filename,
-                'summary': response.text,
-                'total_characters': len(text)
-            })
-
+                    'image_data': encoded_image,
+                    'mime_type': mime_type,
+                    'type': 'image'
+                })
+                
         except Exception as e:
-            return jsonify({'error': f'Processing error: {str(e)}'}), 500
+            return jsonify({'error': f'Parsing error: {str(e)}'}), 500
             
-        finally:
-            # CRITICAL SECURITY STEP: Immediately delete the file from the server disk!
-            # This ensures zero persistent storage of user-uploaded binaries.
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except Exception as cleanup_error:
-                    print(f"Cleanup error: {cleanup_error}")
-
-    return jsonify({'error': 'Invalid file type. Only PDF and TXT files are allowed.'}), 400
+    return jsonify({'error': 'Invalid file type. Please upload a PDF, TXT, or image file (PNG, JPG, JPEG).'}), 400
 
 @app.route('/ask', methods=['POST'])
 def ask_question():
-    data = request.json
+    data = request.get_json()
     document_text = data.get('document_text', '')
+    image_data = data.get('image_data', '')
+    mime_type = data.get('mime_type', 'image/jpeg')
     question = data.get('question', '')
     
-    if not document_text or not question:
-        return jsonify({'error': 'Missing document context or question.'}), 400
+    if (not document_text and not image_data) or not question:
+        return jsonify({'error': 'Missing document/image content or question.'}), 400
         
-    try:
-        # Prompt construction pairing the document text securely with the user question
-        prompt = f"Context document contents:\n{document_text[:8000]}\n\nQuestion: {question}\n\nAnswer accurately based only on the context provided:"
-
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                safety_settings=STRICT_SAFETY_SETTINGS,
-                max_output_tokens=500
-            )
-        )
-
-        # Handle safety blocks during Q&A generation
-        if not response.text or (response.candidates and response.candidates[0].finish_reason == types.FinishReason.SAFETY):
-            return jsonify({
-                'answer': 'I cannot answer this question because the content triggers safety policies regarding explicit or prohibited material.'
-            })
-
-        return jsonify({
-            'answer': response.text
-        })
-
-    except Exception as e:
-        return jsonify({'error': f'Error generating response: {str(e)}'}), 500
+    if contains_prohibited_content(question) or (document_text and contains_prohibited_content(document_text)):
+        return jsonify({'error': 'Request blocked: Inquiries involving illegal acts, fraud, self-harm, hate speech, sexually explicit material, or child exploitation are strictly prohibited.'}), 400
+        
+    system_instruction = (
+        "You are a secure, ethical, and professional document and image assistant. You must strictly refuse to assist with, "
+        "generate, summarize, or promote any illegal acts, fraud, financial scams, self-harm, "
+        "violence, hate speech, harassment, sexually explicit material, pornography, or any form "
+        "of child exploitation and abuse (CSAM). Inspect both text and visual media thoroughly. "
+        "If any uploaded image or document touches upon these restricted topics, immediately and firmly refuse. "
+        "Safely and accurately assist with all other valid, legal documents and images."
+    )
+    
+    contents = []
+    if image_data:
+        img_bytes = base64.b64decode(image_data)
+        image_part = types.Part.from_bytes(data=img_bytes, mime_type=mime_type)
+        contents.append(image_part)
+        contents.append(f"User Question regarding the image: {question}")
+    else:
+        prompt = f"Reference Document:\n---\n{document_text}\n---\n\nUser Question: {question}"
+        contents.append(prompt)
+    
+    strict_safety_config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        safety_settings=[
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+            ),
+        ]
+    )
+    
+    models_to_try = ['gemini-3.8-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+    
+    last_error = ""
+    for model_name in models_to_try:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=strict_safety_config
+                )
+                if response and response.text:
+                    return jsonify({'answer': response.text})
+            except Exception as e:
+                last_error = str(e)
+                if '503' in last_error or 'UNAVAILABLE' in last_error:
+                    time.sleep(1)
+                    continue
+                else:
+                    break
+                    
+    return jsonify({'error': f'Request could not be processed due to safety policies or server capacity: {last_error}'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=False, port=5000) # Keep debug=False in production environments
+    app.run(debug=True)
