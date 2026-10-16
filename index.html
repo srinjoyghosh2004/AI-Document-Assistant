@@ -1,61 +1,66 @@
-<script>
-        let currentDocumentText = null;
+!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Document Assistant</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #f9f9f9; color: #333; }
+        h1 { color: #2c3e50; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        input, button, textarea { width: 100%; padding: 10px; margin-top: 10px; box-sizing: border-box; }
+        button { background: #4285F4; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #3367D6; }
+        #response { background: #eef2f5; padding: 15px; border-radius: 4px; margin-top: 15px; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h1>AI Document Assistant</h1>
+    <div class="card">
+        <h3>1. Upload Document (PDF or TXT)</h3>
+        <input type="file" id="fileInput">
+        <button onclick="uploadFile()">Upload & Process</button>
+        <p id="uploadStatus"></p>
+    </div>
+    <div class="card">
+        <h3>2. Ask a Question</h3>
+        <textarea id="questionInput" placeholder="Ask something about your document..."></textarea>
+        <button onclick="askQuestion()">Ask AI</button>
+        <h3>Answer:</h3>
+        <div id="response">Your answers will appear here...</div>
+    </div>
 
+    <script>
+        let currentDocumentText = "";
         async function uploadFile() {
             const fileInput = document.getElementById('fileInput');
-            const statusDiv = document.getElementById('uploadStatus');
-            if (fileInput.files.length === 0) {
-                statusDiv.innerHTML = "Please select a file first.";
-                return;
-            }
-
+            if (fileInput.files.length === 0) { alert('Please select a file first!'); return; }
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
-            statusDiv.innerHTML = '<span class="loader">Uploading, scanning, and summarizing...</span>';
-
-            try {
-                const response = await fetch('/upload', { method: 'POST', body: formData });
-                const data = await response.json();
-
-                if (data.success) {
-                    currentDocumentText = data.document_text; // Store text in memory securely
-                    statusDiv.innerHTML = `Successfully uploaded & verified: <strong>${data.filename}</strong>`;
-                    document.getElementById('summaryText').innerText = data.summary;
-                    document.getElementById('summaryCard').classList.remove('hidden');
-                    document.getElementById('qaCard').classList.remove('hidden');
-                } else {
-                    statusDiv.innerHTML = `<span style="color: #ef4444;">${data.error}</span>`;
-                }
-            } catch (err) {
-                statusDiv.innerHTML = "An error occurred during upload.";
+            document.getElementById('uploadStatus').innerText = 'Uploading and parsing...';
+            
+            const res = await fetch('/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+            
+            if (data.error) { 
+                alert(data.error); 
+            } else {
+                // Captures text, extracted_text, content, or any returned string payload
+                currentDocumentText = data.text || data.extracted_text || data.content || (typeof data === 'string' ? data : Object.values(data)[0]);
+                document.getElementById('uploadStatus').innerText = 'Success! Document loaded.';
             }
         }
-
         async function askQuestion() {
             const question = document.getElementById('questionInput').value;
-            const qaResult = document.getElementById('qaResult');
-            const referenceText = document.getElementById('referenceText');
-            
-            if (!question.trim() || !currentDocumentText) return;
-
-            qaResult.classList.remove('hidden');
-            referenceText.innerHTML = '<span class="loader">AI is analyzing document context...</span>';
-
-            try {
-                const response = await fetch('/ask', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        document_text: currentDocumentText, 
-                        question: question 
-                    })
-                });
-                const data = await response.json();
-                
-                document.getElementById('answerHeading').innerText = "Assistant Answer:";
-                referenceText.innerText = data.answer || data.error;
-            } catch (err) {
-                referenceText.innerText = "Failed to retrieve an answer.";
-            }
+            if (!currentDocumentText) { alert('Please upload a document first!'); return; }
+            document.getElementById('response').innerText = 'Thinking...';
+            const res = await fetch('/ask', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ document_text: currentDocumentText, question: question })
+            });
+            const data = await res.json();
+            document.getElementById('response').innerText = data.answer || data.error;
         }
     </script>
+</body>
+</html>
