@@ -24,11 +24,11 @@ def contains_prohibited_content(text):
         return False
         
     prohibited_patterns = [
-        r'\b(csam|csae|child explicit|minor abuse|child exploitation)\b',
+        r'\b(csam|csae|minor abuse|child exploitation)\b',
         r'\b(suicide|self-harm|cut myself|end my life)\b',
         r'\b(how to make a bomb|explosive recipe|illegal weapon)\b',
         r'\b(hatespeech|racial slur|kill all|white supremacy target)\b',
-        r'\b(pornography|sexually explicit|xxx video|incest|underage explicit)\b',
+        r'\b(pornography|sexually explicit|xxx video|incest)\b',
         r'\b(bank fraud scheme|money laundering guide|stolen credit card network)\b'
     ]
     
